@@ -1,7 +1,12 @@
 """
 Score de Riesgo Crediticio — Aplicacion Web
 ============================================
-Ejecutar con:  python -m streamlit run app/app.py
+Variables del modelo (9) — sin data leakage:
+    tot_cur_bal, installment, annual_inc, term,
+    total_rev_hi_lim, loan_amnt, verification_status,
+    dti, revol_util
+
+Ejecutar con:  streamlit run app/app.py
 """
 
 import streamlit as st
@@ -23,7 +28,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ─── Definicion Arquitectura Pytorch ──────────────────────────────────────────
+# ─── Arquitectura de la Red Neuronal ────────────────────────────────────────
 class RedNeuronal(nn.Module):
     def __init__(self, n_entrada, capas, dropout):
         super(RedNeuronal, self).__init__()
@@ -41,14 +46,13 @@ class RedNeuronal(nn.Module):
     def forward(self, x):
         return self.red(x)
 
-# ─── Carga Optimizada de Artefactos ──────────────────────────────────────────
+# ─── Carga de Artefactos ────────────────────────────────────────────────────
 @st.cache_resource(show_spinner=False)
 def load_artifacts():
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    base_dir    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     model_path  = os.path.join(base_dir, "models",  "modelo_final.pt")
     scaler_path = os.path.join(base_dir, "models",  "scaler.pkl")
     woe_path    = os.path.join(base_dir, "outputs", "woe_bins.pkl")
-    # ✅ CORRECCIÓN: nombre alineado con el Notebook 04 (scorecard_params.pkl)
     params_path = os.path.join(base_dir, "outputs", "scorecard_params.pkl")
 
     if not all(os.path.exists(p) for p in [model_path, scaler_path, woe_path, params_path]):
@@ -88,26 +92,24 @@ artifacts = load_artifacts()
 if artifacts is None:
     st.error("### ⚠️ Modelos no encontrados")
     st.markdown("""
-    Para que esta aplicación web funcione y calcule tus probabilidades con el **Modelo Final de Redes Neuronales**, primero debes generarlo localmente:
+    Para que la aplicación funcione, ejecuta primero los Notebooks **02**, **03** y **04**
+    y asegúrate de que estos archivos existan:
 
-    1. Descarga el dataset **Credit Risk Dataset** y sitúalo en la carpeta `data/`.
-    2. Ejecuta los Jupyter Notebooks `01`, `02`, `03` y `04` siguiendo las instrucciones del repositorio.
-    3. Asegúrate de que las carpetas contengan los archivos exportados:
-       - `models/modelo_final.pt` y `models/scaler.pkl`
-       - `outputs/woe_bins.pkl` y `outputs/scorecard_params.pkl`
-
-    Cuando poseas estos archivos, recarga esta página.
+    - `models/modelo_final.pt`
+    - `models/scaler.pkl`
+    - `outputs/woe_bins.pkl`
+    - `outputs/scorecard_params.pkl`
     """)
     st.stop()
 
 model, scaler, woe_bins, scorecard_params = artifacts
 
-# ─── Parametros Dinámicos Scorecard y Bandas ────────────────────────────────
-SCORE_BASE = scorecard_params.get('score_base', 600)
-ODDS_BASE  = scorecard_params.get('odds_objetivo', 1)   # clave del Notebook 04
-PDO        = scorecard_params.get('pdo', 50)             # valor del Notebook 04
+# ─── Parámetros de la Scorecard ─────────────────────────────────────────────
+SCORE_BASE = scorecard_params.get('score_base',    600)
+ODDS_BASE  = scorecard_params.get('odds_objetivo', 1)
+PDO        = scorecard_params.get('pdo',           50)
 FACTOR     = PDO / np.log(2)
-OFFSET     = SCORE_BASE - FACTOR * np.log(ODDS_BASE) if ODDS_BASE > 0 else SCORE_BASE
+OFFSET     = SCORE_BASE - FACTOR * np.log(max(ODDS_BASE, 1e-9))
 SCORE_MIN, SCORE_MAX = 300, 850
 
 BANDAS = [
@@ -118,39 +120,50 @@ BANDAS = [
     ("E", "Riesgo muy alto", 300, 549, "#EF4444"),
 ]
 
-def score_a_prob(score: int) -> float:
-    odds = np.exp((score - OFFSET) / FACTOR)
-    return 1.0 / (1.0 + odds)
+# ─── Funciones principales ───────────────────────────────────────────────────
+
+def banda_de(score: int):
+    for letra, desc, lo, hi, color in BANDAS:
+        if lo <= score <= hi:
+            return letra, desc, color
+    return "E", "Riesgo muy alto", "#EF4444"
 
 
-def calcular_score_real(datos: dict):
+def calcular_score(datos: dict):
+    """
+    Pipeline completo: variables brutas → WOE → scaler → red neuronal → score.
+    Las 9 variables esperadas son:
+        tot_cur_bal, installment, annual_inc, term,
+        total_rev_hi_lim, loan_amnt, verification_status,
+        dti, revol_util
+    """
     df_input = pd.DataFrame([datos])
 
-    # 1. Transformacion WOE
+    # 1. Transformación WOE
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         df_woe = sc.woebin_ply(df_input, woe_bins)
 
     features_req = scaler.feature_names_in_
 
-    # Rellenar faltantes si scorecardpy omitio alguna por N/A o mismatches
+    # Columnas faltantes → 0.0 (por seguridad)
     for col in features_req:
         if col not in df_woe.columns:
             df_woe[col] = 0.0
 
     df_modelo = df_woe[features_req]
 
-    # Extraer factores de riesgo aproximados
+    # Factores de impacto aproximados (para la sección de análisis)
     factores = []
     for col in features_req:
-        woe_val  = df_modelo[col].iloc[0]
+        woe_val    = df_modelo[col].iloc[0]
         pts_impact = int(round(-woe_val * FACTOR))
         if pts_impact != 0:
             nom_base = col.replace('_woe', '')
             val = datos.get(nom_base, "N/A")
             factores.append({"nombre": f"{nom_base} ({val})", "impacto": pts_impact})
 
-    # 2. Pipeline Escalar -> PyTorch -> Score
+    # 2. Normalización → Red neuronal → probabilidad
     x_scaled = scaler.transform(df_modelo)
     x_tensor = torch.FloatTensor(x_scaled)
     with torch.no_grad():
@@ -163,14 +176,7 @@ def calcular_score_real(datos: dict):
     return int(max(SCORE_MIN, min(SCORE_MAX, round(s)))), prob, factores
 
 
-def banda_de(score: int):
-    for letra, desc, lo, hi, color in BANDAS:
-        if lo <= score <= hi:
-            return letra, desc, color
-    return "E", "Riesgo muy alto", "#EF4444"
-
-
-# ─── Graficas ────────────────────────────────────────────────────────────────
+# ─── Gráficas ────────────────────────────────────────────────────────────────
 
 def gauge_chart(score: int) -> go.Figure:
     _, _, color = banda_de(score)
@@ -205,15 +211,13 @@ def gauge_chart(score: int) -> go.Figure:
     return fig
 
 
-def population_chart(score_usuario: int) -> go.Figure:
-    """Histograma simulado de la poblacion con la posicion del usuario."""
+def population_chart(score_usuario: int):
     np.random.seed(42)
     pop = np.concatenate([
         np.random.normal(660, 55, 7500),
         np.random.normal(490, 45, 2500),
     ])
     pop = np.clip(pop, SCORE_MIN, SCORE_MAX)
-
     percentil = (pop <= score_usuario).sum() / len(pop) * 100
 
     fig = go.Figure()
@@ -224,26 +228,21 @@ def population_chart(score_usuario: int) -> go.Figure:
         histnorm="probability density", name="Población",
         hovertemplate="Score: %{x}<br>Densidad: %{y:.4f}<extra></extra>",
     ))
-
     _, _, color = banda_de(score_usuario)
     fig.add_vline(
-        x=score_usuario, line_width=3, line_color=color, line_dash="solid",
+        x=score_usuario, line_width=3, line_color=color,
         annotation_text=f"  Tú: {score_usuario} pts  (P{percentil:.0f})",
         annotation_position="top right",
         annotation_font=dict(size=13, color=color, family="Inter, sans-serif"),
         annotation_bgcolor="white", annotation_bordercolor=color,
         annotation_borderwidth=1, annotation_borderpad=4,
     )
-
     fig.update_layout(
         height=280,
-        xaxis_title="Score crediticio",
-        yaxis_title="",
-        yaxis_showticklabels=False,
-        showlegend=False,
+        xaxis_title="Score crediticio", yaxis_title="",
+        yaxis_showticklabels=False, showlegend=False,
         margin=dict(l=15, r=15, t=40, b=40),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         xaxis=dict(gridcolor="#F1F5F9", showgrid=True),
         yaxis=dict(gridcolor="#F1F5F9", showgrid=False),
         font={"family": "Inter, sans-serif"},
@@ -251,7 +250,7 @@ def population_chart(score_usuario: int) -> go.Figure:
     return fig, percentil
 
 
-# ─── CSS global ──────────────────────────────────────────────────────────────
+# ─── CSS ─────────────────────────────────────────────────────────────────────
 
 st.markdown("""
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -294,60 +293,75 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# ─── Sidebar: entrada de datos ───────────────────────────────────────────────
-
+# ─── Sidebar — Formulario de entrada ─────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 💳 Tus Datos")
 
+    # ── Préstamo ──────────────────────────────────────────────────────────────
     st.markdown("#### Préstamo")
-    loan_amnt   = st.number_input("Monto (USD)", 500, 40_000, 10_000, 500)
-    term        = st.selectbox("Plazo",
-                               [" 36 months", " 60 months"],
-                               format_func=lambda x: "36 meses" if "36" in x else "60 meses")
-    int_rate    = st.slider("Tasa de interés (%)", 5.0, 30.0, 12.0, 0.25)
-    installment = st.number_input("Cuota mensual (USD)", 30.0, 1500.0, 330.0, 10.0)
 
-    st.markdown("#### Perfil")
-    grade       = st.selectbox("Grado de riesgo", list("ABCDEFG"))
-    home_own    = st.selectbox("Vivienda", ["RENT", "OWN", "MORTGAGE", "OTHER"],
-                               format_func=lambda x: {"RENT": "Alquiler", "OWN": "Propia",
-                                                       "MORTGAGE": "Hipoteca", "OTHER": "Otra"}[x])
-    annual_inc  = st.number_input("Ingreso anual (USD)", 10_000, 500_000, 60_000, 5_000)
-    emp_length  = st.selectbox("Antigüedad laboral",
-                               ["< 1 year", "1 year", "2 years", "3 years", "4 years",
-                                "5 years", "6 years", "7 years", "8 years", "9 years", "10+ years"],
-                               format_func=lambda x: x.replace("year", "año").replace("years", "años"))
-    verification = st.selectbox("Verificación",
-                                ["Not Verified", "Source Verified", "Verified"],
-                                format_func=lambda x: {"Not Verified": "No verificado",
-                                                       "Source Verified": "Fuente verificada",
-                                                       "Verified": "Verificado"}[x])
-    purpose     = st.selectbox("Propósito",
-                               ["debt_consolidation", "credit_card", "home_improvement",
-                                "other", "major_purchase", "small_business", "car",
-                                "medical", "moving", "vacation", "house", "wedding",
-                                "renewable_energy", "educational"],
-                               format_func=lambda x: x.replace("_", " ").title())
-
-    st.markdown("#### Historial crediticio")
-    dti              = st.slider("Deuda / Ingreso (%)", 0.0, 40.0, 15.0, 0.5)
-    revol_util       = st.slider("Uso rotativo (%)", 0.0, 120.0, 50.0, 1.0)
-    # ✅ ADICIÓN: tot_cur_bal — 3ª variable más importante según SHAP (Notebook 04)
-    tot_cur_bal      = st.number_input(
-        "Saldo total actual (USD)",
-        min_value=0,
-        max_value=2_000_000,
-        value=50_000,
-        step=1_000,
-        help="Saldo total en todas las cuentas de crédito activas (tot_cur_bal). "
-             "Es la 3ª variable más predictiva del modelo según el análisis SHAP.",
+    loan_amnt = st.number_input(
+        "Monto del préstamo (USD)",
+        min_value=500, max_value=35_000, value=13_000, step=500,
+        help="loan_amnt — importe solicitado (500 – 35 000 USD)",
     )
-    delinq_2yrs      = st.number_input("Morosidades (2 años)", 0, 20, 0)
-    pub_rec          = st.number_input("Registros públicos negativos", 0, 10, 0)
-    inq_last_6mths   = st.number_input("Consultas crediticias (6 meses)", 0, 10, 1)
+    term = st.selectbox(
+        "Plazo",
+        [" 36 months", " 60 months"],
+        format_func=lambda x: "36 meses" if "36" in x else "60 meses",
+        help="term — duración del préstamo",
+    )
+    installment = st.number_input(
+        "Cuota mensual (USD)",
+        min_value=15.0, max_value=1_500.0, value=383.0, step=10.0,
+        help="installment — pago mensual fijo del préstamo",
+    )
+
+    # ── Perfil financiero ─────────────────────────────────────────────────────
+    st.markdown("#### Perfil financiero")
+
+    annual_inc = st.number_input(
+        "Ingreso anual (USD)",
+        min_value=0, max_value=500_000, value=60_000, step=5_000,
+        help="annual_inc — ingreso anual declarado",
+    )
+    verification_status = st.selectbox(
+        "Verificación de ingresos",
+        ["Not Verified", "Source Verified", "Verified"],
+        format_func=lambda x: {
+            "Not Verified":    "No verificado",
+            "Source Verified": "Fuente verificada",
+            "Verified":        "Verificado",
+        }[x],
+        help="verification_status — nivel de verificación del ingreso declarado",
+    )
+    dti = st.slider(
+        "Ratio deuda / ingreso — DTI (%)",
+        min_value=0.0, max_value=60.0, value=17.6, step=0.5,
+        help="dti — deuda mensual total / ingreso mensual × 100",
+    )
+
+    # ── Historial de crédito ──────────────────────────────────────────────────
+    st.markdown("#### Historial de crédito")
+
+    revol_util = st.slider(
+        "Uso de crédito rotativo (%)",
+        min_value=0.0, max_value=120.0, value=56.0, step=1.0,
+        help="revol_util — saldo rotativo utilizado / límite total × 100",
+    )
+    tot_cur_bal = st.number_input(
+        "Saldo total en cuentas activas (USD)",
+        min_value=0, max_value=500_000, value=60_000, step=1_000,
+        help="tot_cur_bal — saldo total actual en todas las cuentas de crédito",
+    )
+    total_rev_hi_lim = st.number_input(
+        "Límite de crédito rotativo total (USD)",
+        min_value=0, max_value=300_000, value=20_000, step=1_000,
+        help="total_rev_hi_lim — límite máximo acumulado de todas las líneas rotativas",
+    )
 
     st.markdown("---")
-    calcular = st.button("Calcular mi Score", width='stretch', type="primary")
+    calcular = st.button("Calcular mi Score", width="stretch", type="primary")
 
 
 # ─── Contenido principal ─────────────────────────────────────────────────────
@@ -376,12 +390,14 @@ if not calcular:
         ### ¿Cómo funciona?
         1. **Completa tus datos** en el panel lateral izquierdo.
         2. **Haz clic en "Calcular mi Score"** para obtener tu resultado.
-        3. **Revisa tu perfil**: score, probabilidad de incumplimiento, banda de riesgo
-           y tu posición frente a la población.
+        3. **Revisa tu perfil** : score, probabilidad de incumplimiento,
+           banda de riesgo y tu posición frente a la población.
 
         ### Sobre el modelo
-        Este score está siendo procesado en **tiempo real** por una **Red Neuronal Artificial**
-        desarrollada y entrenada sobre datos históricos para predecir el riesgo con alta precisión.
+        Este score está siendo procesado en **tiempo real** por una
+        **Red Neuronal Artificial** entrenada sobre datos históricos de crédito.
+        El modelo utiliza **9 variables** seleccionadas por su poder predictivo
+        (Information Value ≥ 0.02) y libres de data leakage.
         """)
     with c2:
         st.markdown("""
@@ -394,29 +410,24 @@ if not calcular:
         | **D** | Riesgo alto |
         | **E** | Riesgo muy alto |
 
-        > *Modelo en producción sobre PyTorch.*
+        > *Modelo PyTorch · Transformación WOE · Escala PDO*
         """)
 
 else:
-    # ✅ ADICIÓN: tot_cur_bal incluido en el diccionario de entrada al modelo
+    # Diccionario avec les 9 variables brutes (antes del WOE)
     datos_dict = {
-        "grade":               grade,
-        "int_rate":            int_rate,
-        "term":                term,
-        "dti":                 dti,
-        "annual_inc":          annual_inc,
-        "tot_cur_bal":         tot_cur_bal,
-        "delinq_2yrs":         delinq_2yrs,
-        "pub_rec":             pub_rec,
-        "inq_last_6mths":      inq_last_6mths,
-        "revol_util":          revol_util,
-        "home_ownership":      home_own,
-        "purpose":             purpose,
-        "verification_status": verification,
-        "emp_length":          emp_length,
+        "loan_amnt":            loan_amnt,
+        "term":                 term,
+        "installment":          installment,
+        "annual_inc":           annual_inc,
+        "verification_status":  verification_status,
+        "dti":                  dti,
+        "revol_util":           revol_util,
+        "tot_cur_bal":          tot_cur_bal,
+        "total_rev_hi_lim":     total_rev_hi_lim,
     }
 
-    score, prob, factores = calcular_score_real(datos_dict)
+    score, prob, factores = calcular_score(datos_dict)
     letra, desc_banda, color_banda = banda_de(score)
 
     st.markdown(f"""
@@ -424,17 +435,17 @@ else:
         <div class="kpi-card" style="background: linear-gradient(135deg, #EEF2FF, #E0E7FF);">
             <p class="label" style="color:#6366F1;">Score crediticio</p>
             <p class="value" style="color:#4338CA;">{score}</p>
-            <p class="sub" style="color:#6366F1;">de {SCORE_MAX} puntos</p>
+            <p class="sub"   style="color:#6366F1;">de {SCORE_MAX} puntos</p>
         </div>
         <div class="kpi-card" style="background: linear-gradient(135deg, #FFF1F2, #FFE4E6);">
             <p class="label" style="color:#E11D48;">Probabilidad de default</p>
             <p class="value" style="color:#BE123C;">{prob*100:.1f}%</p>
-            <p class="sub" style="color:#E11D48;">estimada por la Red Neuronal</p>
+            <p class="sub"   style="color:#E11D48;">estimada por la Red Neuronal</p>
         </div>
         <div class="kpi-card" style="background:{color_banda}22;">
             <p class="label" style="color:{color_banda};">Banda de riesgo</p>
             <p class="value" style="color:{color_banda};">{letra}</p>
-            <p class="sub" style="color:{color_banda};">{desc_banda}</p>
+            <p class="sub"   style="color:{color_banda};">{desc_banda}</p>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -448,7 +459,8 @@ else:
         fig_pop, perc = population_chart(score)
         st.plotly_chart(fig_pop, width='stretch', config={"displayModeBar": False})
 
-    st.markdown('<p class="section-title">Análisis de variables extraído del modelo</p>', unsafe_allow_html=True)
+    st.markdown('<p class="section-title">Análisis de variables extraído del modelo</p>',
+                unsafe_allow_html=True)
 
     factores_sorted = sorted(factores, key=lambda x: x["impacto"])
     rows_html = ""
@@ -467,7 +479,7 @@ else:
 
 st.markdown("""
 <div class="disclaimer">
-    Modelo de Redes Neuronales construido en PyTorch · Score optimizado con Weights of Evidence
+    Modelo de Redes Neuronales construido en PyTorch · Score con metodología PDO (Siddiqi, 2006)
     · <a href="https://www.kaggle.com/datasets/ranadeep/credit-risk-dataset/data"
        target="_blank" style="color:#6366F1;">Ver origen de los datos</a>
 </div>
