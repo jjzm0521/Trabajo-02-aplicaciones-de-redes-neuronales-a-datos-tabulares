@@ -1,122 +1,87 @@
-# Modelo de Riesgo de Crédito — Probabilidad de Incumplimiento
+<div align="center">
+  <h1>💳 Modelo de Riesgo de Crédito — CreditScore</h1>
+  <p><em>Predicción de probabilidad de incumplimiento mediante Redes Neuronales Artificiales</em></p>
 
-Proyecto del curso de **Redes Neuronales Artificiales** que desarrolla un modelo para predecir la probabilidad de incumplimiento crediticio, utilizando el [Credit Risk Dataset](https://www.kaggle.com/datasets/ranadeep/credit-risk-dataset/data) de LendingClub.
+  <!-- Badges -->
+  <a href="https://share.streamlit.io/">
+    <img src="https://img.shields.io/badge/Aplicación_Web-Streamlit-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white" alt="App Web"/>
+  </a>
+  <a href="https://jjzm0521.github.io/Trabajo-02-aplicaciones-de-redes-neuronales-a-datos-tabulares/reporte.html">
+    <img src="https://img.shields.io/badge/Reporte_Técnico-Publicado-0F172A?style=for-the-badge&logo=readthedocs&logoColor=white" alt="Reporte Técnico"/>
+  </a>
+  <a href="https://youtube.com/">
+    <img src="https://img.shields.io/badge/Video_Promocional-YouTube-FF0000?style=for-the-badge&logo=youtube&logoColor=white" alt="Video"/>
+  </a>
+</div>
 
-## Objetivo
+<br>
 
-Crear y validar un modelo de clasificación binaria basado en redes neuronales artificiales que estime la probabilidad de que un prestatario no cumpla con el pago de su crédito. Se complementa con una scorecard interpretable y una aplicación web interactiva.
+Proyecto desarrollado para el curso de **Redes Neuronales Artificiales**, que aborda un problema crítico en la industria financiera: predecir si un prestatario incumplirá sus pagos (probabilidad de impago o *default*). El modelo se basa en el [Credit Risk Dataset](https://www.kaggle.com/datasets/ranadeep/credit-risk-dataset/data) histórico de LendingClub.
 
-## Estructura del repositorio
+## 🎯 Objetivo y Misión
 
-```
-├── notebooks/
-│   ├── 01_carga_y_eda.ipynb          # Carga del dataset, recodificación y EDA
-│   ├── 02_preprocesamiento.ipynb     # Limpieza, selección de variables (IV/WOE), splits
-│   ├── 03_modelamiento.ipynb         # Regresión logística + redes neuronales
-│   └── 04_scorecard.ipynb            # Scorecard y análisis de variables de riesgo
-│
-├── app/
-│   └── app.py                        # Aplicación web (Streamlit)
-│
-├── data/                             # Dataset (no incluido — ver data/README.md)
-├── figures/                          # Gráficas generadas por los notebooks
-├── outputs/                          # Splits, resultados y probabilidades
-├── docs/                             # Enunciado del trabajo
-│
-├── requirements.txt                  # Dependencias de Python
-└── README.md
-```
+Crear y validar un modelo de clasificación binaria altamente interpretable utilizando una Red Neuronal Artificial en **PyTorch**, estandarizado sobre factores de escala *Weight of Evidence (WOE)*. Este modelo alimenta una Scorecard clásica y se encuentra desplegado en una aplicación web interactiva orientada al usuario final, con un análisis de métricas sobre qué atributos hacen más riesgoso o confiable a un perfil crediticio.
 
-## Pipeline de análisis
+---
 
-### Notebook 01 — Carga y EDA
+## 🚀 Entregables Públicos
 
-- Carga del dataset original (`loan.csv`, ~880k registros, 74 variables).
-- Recodificación de `loan_status` en variable binaria `default` (0 = buen pagador, 1 = mal pagador), excluyendo categorías con resultado incierto.
-- Análisis exploratorio: distribución de clases, histogramas, boxplots, tasa de incumplimiento por variable categórica, mapa de correlaciones y análisis de valores faltantes.
-- Guardado en formato Parquet.
+1. **[🖥️ Aplicación Web Interactiva](https://share.streamlit.io/)**: (⚠️ *Reemplazar con el link generado en Streamlit Cloud*). Permite a individuos simular su riesgo ingresando 4 datos básicos, visualizando su banda de riesgo y el impacto individual de cada atributo. 
+2. **[📄 Reporte Técnico / Blog Post](https://jjzm0521.github.io/Trabajo-02-aplicaciones-de-redes-neuronales-a-datos-tabulares/reporte.html)**: Documentación de la metodología, hipótesis, arquitecturas y lecciones aprendidas (Disponible una vez activo GitHub Pages).
+3. **[🎬 Video Promocional](https://youtube.com/)**: Explicación entusiasta y presentación del caso de éxito comercial y las contribuciones individuales.
 
-### Notebook 02 — Preprocesamiento
+---
 
-- Eliminación de variables por: identificadores, alto porcentaje de nulos (>40%), varianza cero, alta cardinalidad, y **data leakage** (variables que contienen información posterior al evento de incumplimiento).
-- Conversión de fechas a escala numérica lineal.
-- Imputación de valores faltantes (mediana / moda).
-- Selección de variables mediante **Information Value** (IV ≥ 0.02).
-- Transformación **WOE** (Weight of Evidence).
-- Manejo del desbalance de clases (SMOTE / UnderSampling).
-- División estratificada: 70% train / 15% validación / 15% test.
+## 🛠️ Instalación y Replicación (Desarrollo Local)
 
-### Notebook 03 — Modelamiento
+Para correr la aplicación o las libretas de experimentación en tu entorno local:
 
-- **Modelo de referencia:** Regresión Logística (línea base).
-- **Redes Neuronales Artificiales** con PyTorch:
-  - Modelo A: 2 capas ocultas (64 → 32), dropout 0.3
-  - Modelo B: 3 capas ocultas (64 → 32 → 16), dropout 0.3
-  - Modelo C: 3 capas ocultas (128 → 64 → 32), dropout 0.4
-- Entrenamiento con Adam, BCE Loss y early stopping.
-- Comparación de los 4 modelos sobre validación (AUC-ROC, F1-Score).
-- Evaluación final del mejor modelo sobre el conjunto de prueba.
+### 1. Requisitos Previos
+- Python 3.10 o superior.
 
-### Notebook 04 — Scorecard
-
-- Conversión de probabilidades a puntaje crediticio (300–850 pts) con PDO = 20.
-- Análisis de variables de riesgo mediante Information Value y WOE.
-- Segmentación en 5 bandas de riesgo (A–E).
-- Caso de uso: cómo un individuo puede conocer su score y compararse con la población.
-
-## Aplicación web
-
-La aplicación web permite a los usuarios ingresar sus características y obtener:
-- Su **score crediticio** en la escala 300–850.
-- Su **probabilidad estimada de incumplimiento**.
-- Su **banda de riesgo** (A–E).
-- Una **comparación visual** con la distribución de la población.
-
-### Ejecutar la aplicación
+### 2. Configuración y Dependencias
 
 ```bash
-cd app
-streamlit run app.py
-```
-
-## Instalación y ejecución
-
-### Requisitos previos
-- Python 3.10+
-- pip
-
-### Configuración
-
-```bash
-# Clonar el repositorio
-git clone https://github.com/<usuario>/Trabajo-02-aplicaciones-de-redes-neuronales-a-datos-tabulares.git
+# Clonar el proyecto
+git clone https://github.com/jjzm0521/Trabajo-02-aplicaciones-de-redes-neuronales-a-datos-tabulares.git
 cd Trabajo-02-aplicaciones-de-redes-neuronales-a-datos-tabulares
 
-# Instalar dependencias
+# Instalar los paquetes requeridos (PyTorch, Streamlit, SHAP, etc.)
 pip install -r requirements.txt
 
-# Descargar el dataset (requiere kaggle configurado)
+# Descargar la base de datos (Requiere credenciales de Kaggle)
 python download_dataset.py
 ```
 
-### Ejecución de notebooks
+### 3. Lanzar la Aplicación Web
 
-Los notebooks deben ejecutarse en orden:
+La aplicación utilizará los pesos pre-entrenados del modelo ya existentes (`models/modelo_final.pt`).
 
+```bash
+streamlit run app/app.py
 ```
-01_carga_y_eda.ipynb → 02_preprocesamiento.ipynb → 03_modelamiento.ipynb → 04_scorecard.ipynb
+
+---
+
+## 📂 Arquitectura del Repositorio
+
+El pipeline end-to-end se encuentra estructurado en libretas independientes:
+
+```text
+├── notebooks/
+│   ├── 01_carga_y_eda.ipynb          # Cargue, imputaciones base y EDA.
+│   ├── 02_preprocesamiento.ipynb     # Limpieza WOE/IV y manejo de data leakage.
+│   ├── 03_modelamiento.ipynb         # Redes Neuronales (Grid y Dropout) vs Regresión base.
+│   └── 04_scorecard.ipynb            # Escalamiento PDO, calibración y bandas de riesgo.
+│
+├── app/
+│   └── app.py                        # App en Streamlit orientada a negocio.
+├── docs/                             # Reporte y dependencias de enlaces web.
+├── outputs/                          # Resultados experimentales simulados (distribuciones reales).
+└── models/                           # Pesos de Deep Learning (.pt) listos para inferencia.
 ```
 
-Se pueden ejecutar desde Jupyter Notebook, JupyterLab o Google Colab.
-
-## Dataset
-
-**Credit Risk Dataset** — LendingClub  
-Disponible en: https://www.kaggle.com/datasets/ranadeep/credit-risk-dataset/data
-
-> El dataset no se incluye en el repositorio por su tamaño. Consultar `data/README.md` para instrucciones de descarga.
-
-## Referencias
+## 📚 Bibliografía y Referencias Clave
 
 - Siddiqi, N. (2006). *Credit Risk Scorecards: Developing and Implementing Intelligent Credit Scoring*. Wiley.
 - Thomas, L.C., Edelman, D.B., & Crook, J.N. (2002). *Credit Scoring and its Applications*. SIAM.

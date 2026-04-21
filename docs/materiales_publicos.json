@@ -1,0 +1,12 @@
+{
+  "reporte": {
+    "label": "Reporte técnico final",
+    "url": "https://jjzm0521.github.io/Trabajo-02-aplicaciones-de-redes-neuronales-a-datos-tabulares/reporte.html",
+    "description": "Metodología, modelos y hallazgos"
+  },
+  "video": {
+    "label": "Video promocional",
+    "url": "https://youtube.com/",
+    "description": "Presentación del producto de software"
+  }
+}

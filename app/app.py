@@ -58,6 +58,44 @@ class RedNeuronal(nn.Module):
     def forward(self, x):
         return self.red(x)
 
+
+def load_public_links():
+    """
+    Carga los enlaces públicos del proyecto desde `docs/materiales_publicos.json`.
+    Si el archivo no existe o está incompleto, la app sigue funcionando y
+    muestra una guía para completar los enlaces finales.
+    """
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    links_path = os.path.join(base_dir, "docs", "materiales_publicos.json")
+
+    defaults = {
+        "reporte": {
+            "label": "Reporte técnico",
+            "url": "",
+            "description": "Entrada de blog o publicación final del reporte técnico.",
+        },
+        "video": {
+            "label": "Video promocional",
+            "url": "",
+            "description": "Video publicitario de la aplicación web.",
+        },
+    }
+
+    if not os.path.exists(links_path):
+        return defaults
+
+    try:
+        with open(links_path, "r", encoding="utf-8") as f:
+            custom_links = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return defaults
+
+    for key in defaults:
+        if isinstance(custom_links.get(key), dict):
+            defaults[key].update(custom_links[key])
+
+    return defaults
+
 # ─── Carga de Artefactos ──────────────────────────────────────────────────────
 @st.cache_resource(show_spinner=False)
 def load_artifacts():
@@ -104,6 +142,7 @@ def load_artifacts():
 
 
 artifacts = load_artifacts()
+PUBLIC_LINKS = load_public_links()
 
 if artifacts is None:
     st.error("### ⚠️ Archivos necesarios no encontrados")
@@ -286,6 +325,37 @@ def population_chart(score_usuario: int):
     return fig, percentil
 
 
+def render_public_materials(links: dict, *, compact: bool = False):
+    """
+    Renderiza accesos al reporte técnico y al video promocional.
+    """
+    title = "### Material del proyecto" if compact else "### Explora el proyecto completo"
+    st.markdown(title)
+
+    missing = []
+    for key, title_text in [("reporte", "Reporte técnico"), ("video", "Video promocional")]:
+        item = links.get(key, {})
+        label = item.get("label", title_text)
+        url = (item.get("url") or "").strip()
+        description = item.get("description", "")
+
+        st.markdown(f"**{label}**")
+        if description:
+            st.caption(description)
+
+        if url:
+            st.link_button(f"Abrir {label}", url, use_container_width=True)
+        else:
+            missing.append(label)
+            st.info(f"Pendiente por configurar: agrega la URL de {label.lower()} en `docs/materiales_publicos.json`.")
+
+    if missing and not compact:
+        st.caption(
+            "La aplicación ya incluye el espacio para estos entregables. "
+            "Solo falta reemplazar las URLs vacías por las finales."
+        )
+
+
 # ─── CSS ──────────────────────────────────────────────────────────────────────
 st.markdown("""
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -368,6 +438,9 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     st.markdown("---")
+    render_public_materials(PUBLIC_LINKS, compact=True)
+
+    st.markdown("---")
     calcular = st.button("Calcular mi Score", width="stretch", type="primary")
 
 
@@ -436,6 +509,9 @@ if not calcular:
 
         *\* fijado a la mediana*
         """)
+
+    st.markdown("---")
+    render_public_materials(PUBLIC_LINKS)
 
 else:
     datos_dict = {
