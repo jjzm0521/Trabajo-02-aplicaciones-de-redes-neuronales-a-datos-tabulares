@@ -9,7 +9,7 @@
   <a href="https://jjzm0521.github.io/Trabajo-02-aplicaciones-de-redes-neuronales-a-datos-tabulares/reporte.html">
     <img src="https://img.shields.io/badge/Reporte_Técnico-Publicado-0F172A?style=for-the-badge&logo=readthedocs&logoColor=white" alt="Reporte Técnico"/>
   </a>
-  <a href="https://youtube.com/">
+  <a href="https://youtube.com/shorts/lDyEkjEELtQ">
     <img src="https://img.shields.io/badge/Video_Promocional-YouTube-FF0000?style=for-the-badge&logo=youtube&logoColor=white" alt="Video"/>
   </a>
 </div>
