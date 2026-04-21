@@ -3,7 +3,7 @@
   <p><em>Predicción de probabilidad de incumplimiento mediante Redes Neuronales Artificiales</em></p>
 
   <!-- Badges -->
-  <a href="https://share.streamlit.io/">
+  <a href="https://trabajo-02-aplicaciones-de-redes-neuronales-a-datos-tabulares.streamlit.app/">
     <img src="https://img.shields.io/badge/Aplicación_Web-Streamlit-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white" alt="App Web"/>
   </a>
   <a href="https://jjzm0521.github.io/Trabajo-02-aplicaciones-de-redes-neuronales-a-datos-tabulares/reporte.html">
@@ -27,7 +27,7 @@ Crear y validar un modelo de clasificación binaria altamente interpretable util
 ## 🚀 Entregables Públicos
 
 1. **[🖥️ Aplicación Web Interactiva](https://share.streamlit.io/)**: (⚠️ *Reemplazar con el link generado en Streamlit Cloud*). Permite a individuos simular su riesgo ingresando 4 datos básicos, visualizando su banda de riesgo y el impacto individual de cada atributo. 
-2. **[📄 Reporte Técnico / Blog Post](https://jjzm0521.github.io/Trabajo-02-aplicaciones-de-redes-neuronales-a-datos-tabulares/reporte.html)**: Documentación de la metodología, hipótesis, arquitecturas y lecciones aprendidas (Disponible una vez activo GitHub Pages).
+2. **[📄 Reporte Técnico / Blog Post](https://jjzm0521.github.io/Trabajo-02-aplicaciones-de-redes-neuronales-a-datos-tabulares/docs/reporte.html)**: Documentación de la metodología, hipótesis, arquitecturas y lecciones aprendidas (Disponible una vez activo GitHub Pages).
 3. **[🎬 Video Promocional](https://youtube.com/)**: Explicación entusiasta y presentación del caso de éxito comercial y las contribuciones individuales.
 
 ---
