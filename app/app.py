@@ -338,7 +338,7 @@ def render_public_materials(links: dict, *, compact: bool = False):
         label = item.get("label", title_text)
         url = (item.get("url") or "").strip()
         if key == "video":
-            url = https://youtube.com/shorts/lDyEkjEELtQ
+            url = 'https://youtube.com/shorts/lDyEkjEELtQ'
         description = item.get("description", "")
 
         st.markdown(f"**{label}**")
