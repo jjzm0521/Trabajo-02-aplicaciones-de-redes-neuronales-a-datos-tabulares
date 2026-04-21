@@ -1,10 +1,21 @@
 """
 Score de Riesgo Crediticio — Aplicacion Web
 ============================================
-Variables del modelo (9) — sin data leakage:
-    tot_cur_bal, installment, annual_inc, term,
-    total_rev_hi_lim, loan_amnt, verification_status,
-    dti, revol_util
+Variables visibles (4) — accesibles directamente por el cliente:
+    loan_amnt, term, annual_inc, tot_cur_bal
+
+Variables fijas a la mediana/moda (5) — no conocidas por el cliente
+o con ambigüedad temporal en el dataset:
+    dti                 → cargada desde outputs/defaults.json
+    revol_util          → cargada desde outputs/defaults.json
+    installment         → cargada desde outputs/defaults.json (leakage documentado)
+    total_rev_hi_lim    → cargada desde outputs/defaults.json
+    verification_status → cargada desde outputs/defaults.json
+
+Nota sobre el pipeline:
+    La Red Neuronal fue entrenada directamente sobre los valores WOE sin
+    normalización previa (ver Notebook 03, clase RedNeuronal). El scaler
+    solo se utiliza aquí para recuperar el orden canónico de las features.
 
 Ejecutar con:  streamlit run app/app.py
 """
@@ -14,13 +25,14 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import os
+import json
 import joblib
 import torch
 import torch.nn as nn
 import scorecardpy as sc
 import warnings
 
-# ─── Configuracion ──────────────────────────────────────────────────────────
+# ─── Configuracion ───────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="CreditScore — Tu Riesgo Crediticio",
     page_icon="💳",
@@ -28,7 +40,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ─── Arquitectura de la Red Neuronal ────────────────────────────────────────
+# ─── Arquitectura de la Red Neuronal ─────────────────────────────────────────
 class RedNeuronal(nn.Module):
     def __init__(self, n_entrada, capas, dropout):
         super(RedNeuronal, self).__init__()
@@ -46,51 +58,55 @@ class RedNeuronal(nn.Module):
     def forward(self, x):
         return self.red(x)
 
-# ─── Carga de Artefactos ────────────────────────────────────────────────────
+# ─── Carga de Artefactos ──────────────────────────────────────────────────────
 @st.cache_resource(show_spinner=False)
 def load_artifacts():
-    base_dir    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    model_path  = os.path.join(base_dir, "models",  "modelo_final.pt")
-    scaler_path = os.path.join(base_dir, "models",  "scaler.pkl")
-    woe_path    = os.path.join(base_dir, "outputs", "woe_bins.pkl")
-    params_path = os.path.join(base_dir, "outputs", "scorecard_params.pkl")
+    base_dir      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    model_path    = os.path.join(base_dir, "models",  "modelo_final.pt")
+    scaler_path   = os.path.join(base_dir, "models",  "scaler.pkl")
+    woe_path      = os.path.join(base_dir, "outputs", "woe_bins.pkl")
+    params_path   = os.path.join(base_dir, "outputs", "scorecard_params.pkl")
+    defaults_path = os.path.join(base_dir, "outputs", "defaults.json")
+    scores_path   = os.path.join(base_dir, "outputs", "distribucion_scores.csv")
 
-    if not all(os.path.exists(p) for p in [model_path, scaler_path, woe_path, params_path]):
+    # Archivos obligatorios
+    required = [model_path, scaler_path, woe_path, params_path, defaults_path]
+    if not all(os.path.exists(p) for p in required):
         return None
 
+    # El scaler solo se utiliza para recuperar el orden canónico de las features
+    # (fue fiteado para la regresión logística — ver Notebook 03)
     scaler           = joblib.load(scaler_path)
+    feature_names    = list(scaler.feature_names_in_)
+
     woe_bins         = joblib.load(woe_path)
     scorecard_params = joblib.load(params_path)
 
-    n_entrada  = len(scaler.feature_names_in_)
-    state_dict = torch.load(model_path, map_location=torch.device('cpu'), weights_only=True)
+    # Carga de los valores por defecto (medianas/modas reales del dataset)
+    with open(defaults_path, "r", encoding="utf-8") as f:
+        defaults = json.load(f)
 
-    architectures = [
-        ([64, 32],      0.3),
-        ([64, 32, 16],  0.3),
-        ([128, 64, 32], 0.4),
-    ]
-    model = None
-    for capas, dropout in architectures:
-        try:
-            m = RedNeuronal(n_entrada, capas, dropout)
-            m.load_state_dict(state_dict)
-            m.eval()
-            model = m
-            break
-        except RuntimeError:
-            continue
+    # Carga de la distribución real de scores (opcional pero recomendada)
+    if os.path.exists(scores_path):
+        df_scores_pop = pd.read_csv(scores_path)
+    else:
+        df_scores_pop = None
 
-    if model is None:
-        raise ValueError("No se pudo inferir la arquitectura de la red.")
+    # Carga del modelo — arquitectura fija (128→64→32, dropout 0.4)
+    n_entrada  = len(feature_names)
+    state_dict = torch.load(model_path, map_location=torch.device("cpu"), weights_only=True)
 
-    return model, scaler, woe_bins, scorecard_params
+    model = RedNeuronal(n_entrada, capas=[128, 64, 32], dropout=0.4)
+    model.load_state_dict(state_dict)
+    model.eval()
+
+    return model, feature_names, woe_bins, scorecard_params, defaults, df_scores_pop
 
 
 artifacts = load_artifacts()
 
 if artifacts is None:
-    st.error("### ⚠️ Modelos no encontrados")
+    st.error("### ⚠️ Archivos necesarios no encontrados")
     st.markdown("""
     Para que la aplicación funcione, ejecuta primero los Notebooks **02**, **03** y **04**
     y asegúrate de que estos archivos existan:
@@ -99,15 +115,17 @@ if artifacts is None:
     - `models/scaler.pkl`
     - `outputs/woe_bins.pkl`
     - `outputs/scorecard_params.pkl`
+    - `outputs/defaults.json` *(generado por el script `generar_defaults.py`)*
+    - `outputs/distribucion_scores.csv` *(opcional — mejora la visualización de población)*
     """)
     st.stop()
 
-model, scaler, woe_bins, scorecard_params = artifacts
+model, FEATURE_NAMES, woe_bins, scorecard_params, DEFAULTS, df_scores_pop = artifacts
 
-# ─── Parámetros de la Scorecard ─────────────────────────────────────────────
-SCORE_BASE = scorecard_params.get('score_base',    600)
-ODDS_BASE  = scorecard_params.get('odds_objetivo', 1)
-PDO        = scorecard_params.get('pdo',           50)
+# ─── Parámetros de la Scorecard ───────────────────────────────────────────────
+SCORE_BASE = scorecard_params.get("score_base",    600)
+ODDS_BASE  = scorecard_params.get("odds_objetivo", 1)
+PDO        = scorecard_params.get("pdo",           50)
 FACTOR     = PDO / np.log(2)
 OFFSET     = SCORE_BASE - FACTOR * np.log(max(ODDS_BASE, 1e-9))
 SCORE_MIN, SCORE_MAX = 300, 850
@@ -120,7 +138,7 @@ BANDAS = [
     ("E", "Riesgo muy alto", 300, 549, "#EF4444"),
 ]
 
-# ─── Funciones principales ───────────────────────────────────────────────────
+# ─── Funciones ────────────────────────────────────────────────────────────────
 
 def banda_de(score: int):
     for letra, desc, lo, hi, color in BANDAS:
@@ -131,44 +149,50 @@ def banda_de(score: int):
 
 def calcular_score(datos: dict):
     """
-    Pipeline completo: variables brutas → WOE → scaler → red neuronal → score.
-    Las 9 variables esperadas son:
-        tot_cur_bal, installment, annual_inc, term,
-        total_rev_hi_lim, loan_amnt, verification_status,
-        dti, revol_util
+    Pipeline: variables brutas → WOE → Red Neuronal → Score PDO.
+
+    Importante: la Red Neuronal fue entrenada directamente sobre los valores
+    WOE brutos (ver Notebook 03). No se aplica StandardScaler aquí.
     """
-    df_input = pd.DataFrame([datos])
+    # Completar con valores por defecto (medianas/modas reales del dataset)
+    datos_completos = {**DEFAULTS, **datos}
+    df_input = pd.DataFrame([datos_completos])
 
     # 1. Transformación WOE
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         df_woe = sc.woebin_ply(df_input, woe_bins)
 
-    features_req = scaler.feature_names_in_
-
-    # Columnas faltantes → 0.0 (por seguridad)
-    for col in features_req:
+    # Reordenar las columnas en el orden esperado por el modelo
+    for col in FEATURE_NAMES:
         if col not in df_woe.columns:
             df_woe[col] = 0.0
 
-    df_modelo = df_woe[features_req]
+    df_modelo = df_woe[FEATURE_NAMES]
 
-    # Factores de impacto aproximados (para la sección de análisis)
+    # Factores de impacto para el análisis de variables
     factores = []
-    for col in features_req:
+    for col in FEATURE_NAMES:
         woe_val    = df_modelo[col].iloc[0]
         pts_impact = int(round(-woe_val * FACTOR))
         if pts_impact != 0:
-            nom_base = col.replace('_woe', '')
-            val = datos.get(nom_base, "N/A")
-            factores.append({"nombre": f"{nom_base} ({val})", "impacto": pts_impact})
+            nom_base = col.replace("_woe", "")
+            val = datos_completos.get(nom_base, "N/A")
+            factores.append({"nombre": nom_base, "valor": val, "impacto": pts_impact})
 
-    # 2. Normalización → Red neuronal → probabilidad
-    x_scaled = scaler.transform(df_modelo)
-    x_tensor = torch.FloatTensor(x_scaled)
+    # 2. Red Neuronal directamente sobre los valores WOE (sin scaler)
+    x_tensor = torch.FloatTensor(df_modelo.values)
     with torch.no_grad():
         prob = model(x_tensor).item()
 
+    # 3. Recalibración — corrección del sesgo por undersampling 50/50
+    prior_train = 0.50
+    prior_real  = 0.219
+    odds_raw    = prob / (1 - prob)
+    odds_cal    = odds_raw * (prior_real / (1 - prior_real)) / (prior_train / (1 - prior_train))
+    prob        = odds_cal / (1 + odds_cal)
+
+    # 4. Conversión a score PDO
     prob = np.clip(prob, 1e-6, 1 - 1e-6)
     odds = (1 - prob) / prob
     s    = OFFSET + FACTOR * np.log(odds)
@@ -176,7 +200,7 @@ def calcular_score(datos: dict):
     return int(max(SCORE_MIN, min(SCORE_MAX, round(s)))), prob, factores
 
 
-# ─── Gráficas ────────────────────────────────────────────────────────────────
+# ─── Gráficas ─────────────────────────────────────────────────────────────────
 
 def gauge_chart(score: int) -> go.Figure:
     _, _, color = banda_de(score)
@@ -212,12 +236,24 @@ def gauge_chart(score: int) -> go.Figure:
 
 
 def population_chart(score_usuario: int):
-    np.random.seed(42)
-    pop = np.concatenate([
-        np.random.normal(660, 55, 7500),
-        np.random.normal(490, 45, 2500),
-    ])
-    pop = np.clip(pop, SCORE_MIN, SCORE_MAX)
+    """
+    Histograma de la distribución real de scores del conjunto de test.
+    Si distribucion_scores.csv no está disponible, se recurre a una
+    distribución simulada (fallback de último recurso).
+    """
+    if df_scores_pop is not None and "score" in df_scores_pop.columns:
+        pop = df_scores_pop["score"].to_numpy()
+        fuente_label = "Población real (conjunto de test)"
+    else:
+        # Fallback simulado — solo si el CSV no existe
+        np.random.seed(42)
+        pop = np.concatenate([
+            np.random.normal(660, 55, 7500),
+            np.random.normal(490, 45, 2500),
+        ])
+        pop = np.clip(pop, SCORE_MIN, SCORE_MAX)
+        fuente_label = "Distribución simulada"
+
     percentil = (pop <= score_usuario).sum() / len(pop) * 100
 
     fig = go.Figure()
@@ -225,7 +261,7 @@ def population_chart(score_usuario: int):
         x=pop, nbinsx=60,
         marker_color="#CBD5E1", marker_line_color="#E2E8F0",
         marker_line_width=0.5, opacity=0.85,
-        histnorm="probability density", name="Población",
+        histnorm="probability density", name=fuente_label,
         hovertemplate="Score: %{x}<br>Densidad: %{y:.4f}<extra></extra>",
     ))
     _, _, color = banda_de(score_usuario)
@@ -239,7 +275,7 @@ def population_chart(score_usuario: int):
     )
     fig.update_layout(
         height=280,
-        xaxis_title="Score crediticio", yaxis_title="",
+        xaxis_title=f"Score crediticio — {fuente_label}", yaxis_title="",
         yaxis_showticklabels=False, showlegend=False,
         margin=dict(l=15, r=15, t=40, b=40),
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
@@ -250,8 +286,7 @@ def population_chart(score_usuario: int):
     return fig, percentil
 
 
-# ─── CSS ─────────────────────────────────────────────────────────────────────
-
+# ─── CSS ──────────────────────────────────────────────────────────────────────
 st.markdown("""
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -262,6 +297,8 @@ st.markdown("""
     }
     section[data-testid="stSidebar"] * { color: #E2E8F0 !important; }
     section[data-testid="stSidebar"] label { font-weight: 500; }
+    section[data-testid="stSidebar"] .info-box,
+    section[data-testid="stSidebar"] .info-box * { color: #1E1B4B !important; }
     .hero { text-align: center; padding: 1.2rem 0 0.5rem; }
     .hero h1 {
         font-size: 2rem; font-weight: 700;
@@ -289,87 +326,56 @@ st.markdown("""
     .factor-pts.pos { color: #10B981; }
     .factor-pts.neg { color: #EF4444; }
     .disclaimer { text-align: center; color: #94A3B8; font-size: 0.75rem; padding: 1rem 0 0.5rem; border-top: 1px solid #F1F5F9; margin-top: 2rem; }
+    .info-box { background: #EEF2FF; border: 1px solid #C7D2FE; border-radius: 10px; padding: 0.8rem 1rem; font-size: 0.8rem; color: #1E1B4B !important; margin-top: 1rem; line-height: 1.6; font-weight: 600; }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ─── Sidebar — Formulario de entrada ─────────────────────────────────────────
+# ─── Sidebar — Formulario ─────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("## 💳 Tus Datos")
+    st.markdown("## 💳 Tu Solicitud")
 
-    # ── Préstamo ──────────────────────────────────────────────────────────────
     st.markdown("#### Préstamo")
-
     loan_amnt = st.number_input(
-        "Monto del préstamo (USD)",
+        "Monto solicitado (USD)",
         min_value=500, max_value=35_000, value=13_000, step=500,
-        help="loan_amnt — importe solicitado (500 – 35 000 USD)",
+        help="loan_amnt · Rango del dataset: 500 – 35 000 USD · Mediana: 13 000 USD",
     )
     term = st.selectbox(
-        "Plazo",
+        "Plazo de devolución",
         [" 36 months", " 60 months"],
         format_func=lambda x: "36 meses" if "36" in x else "60 meses",
-        help="term — duración del préstamo",
-    )
-    installment = st.number_input(
-        "Cuota mensual (USD)",
-        min_value=15.0, max_value=1_500.0, value=383.0, step=10.0,
-        help="installment — pago mensual fijo del préstamo",
+        help="term · Variable más importante según SHAP (importancia: 0.076)",
     )
 
-    # ── Perfil financiero ─────────────────────────────────────────────────────
     st.markdown("#### Perfil financiero")
-
     annual_inc = st.number_input(
-        "Ingreso anual (USD)",
+        "Ingreso anual declarado (USD)",
         min_value=0, max_value=500_000, value=60_000, step=5_000,
-        help="annual_inc — ingreso anual declarado",
-    )
-    verification_status = st.selectbox(
-        "Verificación de ingresos",
-        ["Not Verified", "Source Verified", "Verified"],
-        format_func=lambda x: {
-            "Not Verified":    "No verificado",
-            "Source Verified": "Fuente verificada",
-            "Verified":        "Verificado",
-        }[x],
-        help="verification_status — nivel de verificación del ingreso declarado",
-    )
-    dti = st.slider(
-        "Ratio deuda / ingreso — DTI (%)",
-        min_value=0.0, max_value=60.0, value=17.6, step=0.5,
-        help="dti — deuda mensual total / ingreso mensual × 100",
-    )
-
-    # ── Historial de crédito ──────────────────────────────────────────────────
-    st.markdown("#### Historial de crédito")
-
-    revol_util = st.slider(
-        "Uso de crédito rotativo (%)",
-        min_value=0.0, max_value=120.0, value=56.0, step=1.0,
-        help="revol_util — saldo rotativo utilizado / límite total × 100",
+        help="annual_inc · 2ª variable más importante según SHAP (importancia: 0.049)",
     )
     tot_cur_bal = st.number_input(
-        "Saldo total en cuentas activas (USD)",
-        min_value=0, max_value=500_000, value=60_000, step=1_000,
-        help="tot_cur_bal — saldo total actual en todas las cuentas de crédito",
+        "Saldo total en todas tus cuentas (USD)",
+        min_value=0, max_value=500_000, value=40_000, step=1_000,
+        help="tot_cur_bal · Suma de los saldos actuales en todas tus líneas de crédito · 3ª variable más importante según SHAP (importancia: 0.041) · Mediana del dataset: 80 559 USD",
     )
-    total_rev_hi_lim = st.number_input(
-        "Límite de crédito rotativo total (USD)",
-        min_value=0, max_value=300_000, value=20_000, step=1_000,
-        help="total_rev_hi_lim — límite máximo acumulado de todas las líneas rotativas",
-    )
+
+    st.markdown("""
+    <div class="info-box" style="color: #1E1B4B !important;">
+    ℹ️ Las demás variables del modelo se fijan automáticamente a los valores medianos del dataset,
+    ya que no son directamente conocidas por el solicitante en el momento de la solicitud.
+    </div>
+    """, unsafe_allow_html=True)
 
     st.markdown("---")
     calcular = st.button("Calcular mi Score", width="stretch", type="primary")
 
 
-# ─── Contenido principal ─────────────────────────────────────────────────────
-
+# ─── Contenido principal ──────────────────────────────────────────────────────
 st.markdown("""
 <div class="hero">
     <h1>CreditScore</h1>
-    <p>Conoce tu puntaje crediticio y compárate con la población</p>
+    <p>Estima tu puntaje crediticio con solo 4 datos básicos</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -388,16 +394,17 @@ if not calcular:
     with c1:
         st.markdown("""
         ### ¿Cómo funciona?
-        1. **Completa tus datos** en el panel lateral izquierdo.
+        1. **Completa 4 datos básicos** en el panel lateral izquierdo.
         2. **Haz clic en "Calcular mi Score"** para obtener tu resultado.
         3. **Revisa tu perfil** : score, probabilidad de incumplimiento,
            banda de riesgo y tu posición frente a la población.
 
         ### Sobre el modelo
-        Este score está siendo procesado en **tiempo real** por una
-        **Red Neuronal Artificial** entrenada sobre datos históricos de crédito.
-        El modelo utiliza **9 variables** seleccionadas por su poder predictivo
-        (Information Value ≥ 0.02) y libres de data leakage.
+        Este score está calculado en **tiempo real** por una **Red Neuronal Artificial**
+        entrenada sobre 268 530 créditos históricos de LendingClub.
+        El formulario solicita únicamente las **3 variables más importantes según SHAP**
+        (`term`, `annual_inc`, `tot_cur_bal`) más el monto solicitado (`loan_amnt`).
+        Las variables restantes del modelo se fijan a los valores medianos del dataset.
         """)
     with c2:
         st.markdown("""
@@ -410,21 +417,32 @@ if not calcular:
         | **D** | Riesgo alto |
         | **E** | Riesgo muy alto |
 
-        > *Modelo PyTorch · Transformación WOE · Escala PDO*
+        > *Modelo PyTorch · WOE · Escala PDO*
+        """)
+
+        st.markdown("""
+        ### Variables del modelo
+        | Rang SHAP | Variable |
+        |:---:|---|
+        | 🥇 1 | `term` |
+        | 🥈 2 | `annual_inc` |
+        | 🥉 3 | `tot_cur_bal` |
+        | 4 | `dti` * |
+        | 5 | `revol_util` * |
+        | 6 | `installment` * |
+        | 7 | `total_rev_hi_lim` * |
+        | 8 | `loan_amnt` |
+        | 9 | `verification_status` * |
+
+        *\* fijado a la mediana*
         """)
 
 else:
-    # Diccionario avec les 9 variables brutes (antes del WOE)
     datos_dict = {
-        "loan_amnt":            loan_amnt,
-        "term":                 term,
-        "installment":          installment,
-        "annual_inc":           annual_inc,
-        "verification_status":  verification_status,
-        "dti":                  dti,
-        "revol_util":           revol_util,
-        "tot_cur_bal":          tot_cur_bal,
-        "total_rev_hi_lim":     total_rev_hi_lim,
+        "loan_amnt" : loan_amnt,
+        "term"      : term,
+        "annual_inc": annual_inc,
+        "tot_cur_bal": tot_cur_bal,
     }
 
     score, prob, factores = calcular_score(datos_dict)
@@ -453,25 +471,37 @@ else:
     col_g, col_p = st.columns(2)
     with col_g:
         st.markdown('<p class="section-title">Indicador de Score</p>', unsafe_allow_html=True)
-        st.plotly_chart(gauge_chart(score), width='stretch', config={"displayModeBar": False})
+        st.plotly_chart(gauge_chart(score), width="stretch", config={"displayModeBar": False})
     with col_p:
-        st.markdown('<p class="section-title">Posición simulada en la población</p>', unsafe_allow_html=True)
+        st.markdown('<p class="section-title">Posición en la población</p>', unsafe_allow_html=True)
         fig_pop, perc = population_chart(score)
-        st.plotly_chart(fig_pop, width='stretch', config={"displayModeBar": False})
+        st.plotly_chart(fig_pop, width="stretch", config={"displayModeBar": False})
 
-    st.markdown('<p class="section-title">Análisis de variables extraído del modelo</p>',
+    st.markdown('<p class="section-title">Impacto de cada variable sobre tu score</p>',
                 unsafe_allow_html=True)
+
+    # Variables visibles saisies par le client (les seules à afficher)
+    VARS_CLIENT = {"loan_amnt", "term", "annual_inc", "tot_cur_bal"}
+    NOMS_VARIABLES = {
+        "loan_amnt"  : "Monto solicitado",
+        "term"       : "Plazo del préstamo",
+        "annual_inc" : "Ingreso anual",
+        "tot_cur_bal": "Saldo total en cuentas activas",
+    }
 
     factores_sorted = sorted(factores, key=lambda x: x["impacto"])
     rows_html = ""
     for f in factores_sorted:
-        cls  = "factor-pos" if f["impacto"] > 0 else "factor-neg"
-        icon = "✅" if f["impacto"] > 0 else "⚠️"
-        pcls = "pos" if f["impacto"] > 0 else "neg"
+        if f["nombre"] not in VARS_CLIENT:
+            continue
+        cls   = "factor-pos" if f["impacto"] > 0 else "factor-neg"
+        icon  = "✅" if f["impacto"] > 0 else "⚠️"
+        pcls  = "pos" if f["impacto"] > 0 else "neg"
+        label = f'{NOMS_VARIABLES.get(f["nombre"], f["nombre"])} ({f["nombre"]}) — {f["valor"]}'
         rows_html += (
             f'<div class="factor-row {cls}">'
             f'<span class="factor-icon">{icon}</span>'
-            f'<span class="factor-text">{f["nombre"]}</span>'
+            f'<span class="factor-text">{label}</span>'
             f'<span class="factor-pts {pcls}">{f["impacto"]:+d} pts</span>'
             f'</div>'
         )
@@ -479,8 +509,8 @@ else:
 
 st.markdown("""
 <div class="disclaimer">
-    Modelo de Redes Neuronales construido en PyTorch · Score con metodología PDO (Siddiqi, 2006)
+    Modelo de Redes Neuronales · PyTorch · Score PDO (Siddiqi, 2006) · WOE
     · <a href="https://www.kaggle.com/datasets/ranadeep/credit-risk-dataset/data"
-       target="_blank" style="color:#6366F1;">Ver origen de los datos</a>
+       target="_blank" style="color:#6366F1;">Credit Risk Dataset — Kaggle</a>
 </div>
 """, unsafe_allow_html=True)
