@@ -337,12 +337,14 @@ def render_public_materials(links: dict, *, compact: bool = False):
         item = links.get(key, {})
         label = item.get("label", title_text)
         url = (item.get("url") or "").strip()
+        if key == "video":
+            url = 'https://youtube.com/shorts/lDyEkjEELtQ'
         description = item.get("description", "")
 
         st.markdown(f"**{label}**")
         if description:
             st.caption(description)
-
+    
         if url:
             st.link_button(f"Abrir {label}", url, use_container_width=True)
         else:
